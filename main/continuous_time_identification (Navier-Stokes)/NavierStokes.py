@@ -3,8 +3,7 @@
 """
 
 import sys
-sys.path.insert(0, '../../Utilities/')
-
+sys.path.insert(0, '../../')
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,9 +13,12 @@ import time
 from itertools import product, combinations
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from plotting import newfig, savefig
+from Utilities.plotting import newfig, savefig
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib.gridspec as gridspec
+import pandas as pd
+import math
+import pickle
 
 np.random.seed(1234)
 tf.set_random_seed(1234)
@@ -68,7 +70,7 @@ class PhysicsInformedNN:
                     
         self.optimizer = tf.contrib.opt.ScipyOptimizerInterface(self.loss, 
                                                                 method = 'L-BFGS-B', 
-                                                                options = {'maxiter': 50000,
+                                                                options = {'maxiter': 100,
                                                                            'maxfun': 50000,
                                                                            'maxcor': 50,
                                                                            'maxls': 50,
@@ -95,7 +97,7 @@ class PhysicsInformedNN:
         in_dim = size[0]
         out_dim = size[1]        
         xavier_stddev = np.sqrt(2/(in_dim + out_dim))
-        return tf.Variable(tf.truncated_normal([in_dim, out_dim], stddev=xavier_stddev), dtype=tf.float32)
+        return tf.Variable(tf.random.truncated_normal([in_dim, out_dim], stddev=xavier_stddev), dtype=tf.float32)
     
     def neural_net(self, X, weights, biases):
         num_layers = len(weights) + 1
@@ -204,16 +206,45 @@ def axisEqual3D(ax):
     for ctr, dim in zip(centers, 'xyz'):
         getattr(ax, 'set_{}lim'.format(dim))(ctr - r, ctr + r)
         
+
+def mickeys_data(file_path: str):
+        df = pd.read_csv(file_path)
+        df.sort_values(['x', 'y'])
+        x = []
+        y = []
+        u = []
+        v = []
+        p = []
+        t = []
+        for i, row in df.iterrows():
+            x.append(np.array([row['x']]))
+            y.append(np.array([row['y']]))
+            u.append(np.array([row['u']]))
+            v.append(np.array([row['v']]))
+            p.append(np.array([row['p']]))
+            t.append(np.array([row['totime']]))
         
+        x = np.array(x)
+        y = np.array(y)
+        u = np.array(u)
+        v = np.array(v)
+        p = np.array(p)
+        t = np.array(t)
+
+        return (x, y, u, v, p, t)
+
+
 if __name__ == "__main__": 
       
-    N_train = 5000
+    N_train = 10000
+    N_test = 1000
     
     layers = [3, 20, 20, 20, 20, 20, 20, 20, 20, 2]
     
     # Load Data
+    
     data = scipy.io.loadmat('../Data/cylinder_nektar_wake.mat')
-           
+    '''      
     U_star = data['U_star'] # N x 2 x T
     P_star = data['p_star'] # N x T
     t_star = data['t'] # T x 1
@@ -238,36 +269,72 @@ if __name__ == "__main__":
     u = UU.flatten()[:,None] # NT x 1
     v = VV.flatten()[:,None] # NT x 1
     p = PP.flatten()[:,None] # NT x 1
+    '''
     
     ######################################################################
     ######################## Noiseles Data ###############################
     ######################################################################
-    # Training Data    
-    idx = np.random.choice(N*T, N_train, replace=False)
+    # Training Data
+    x, y, u, v, p, t = mickeys_data('dataV.csv')
+    split_frac = 0.75
+    split = math.floor(len(x)*split_frac)
+    idx = np.random.choice(split, N_train, replace=False)
+
     x_train = x[idx,:]
     y_train = y[idx,:]
     t_train = t[idx,:]
     u_train = u[idx,:]
     v_train = v[idx,:]
-
-    # Training
-    model = PhysicsInformedNN(x_train, y_train, t_train, u_train, v_train, layers)
-    model.train(200000)
     
+
+    print(type(x))
+    print(type(x[0][0]))
+
+    
+    for i in range(10):
+        print(x[i], y[i], t[i], u[i], v[i])
+    
+    # Training
+    
+    model = PhysicsInformedNN(x_train, y_train, t_train, u_train, v_train, layers)
+    model.train(10000)
+    with open('model.save', 'wb') as f:
+        pickle.dump(model, f)
+        print('+++ model saved')
+
+    
+    '''
     # Test Data
     snap = np.array([100])
     x_star = X_star[:,0:1]
     y_star = X_star[:,1:2]
     t_star = TT[:,snap]
     
+
     u_star = U_star[:,0,snap]
     v_star = U_star[:,1,snap]
     p_star = P_star[:,snap]
+    '''
+    x_star = x[split:split+N_test]
+    y_star = y[split:split+N_test]
+    u_star = u[split:split+N_test]
+    v_star = v[split:split+N_test]
+    p_star = p[split:split+N_test]
+    t_star = t[split:split+N_test]
+    
+    for i in range(10):
+        print(x_star[i], y_star[i], u_star[i], v_star[i], p_star[i], t_star[i])
+    
+
     
     # Prediction
     u_pred, v_pred, p_pred = model.predict(x_star, y_star, t_star)
     lambda_1_value = model.sess.run(model.lambda_1)
     lambda_2_value = model.sess.run(model.lambda_2)
+    
+    for x_p, y_p, t_p, u_p, v_p, p_p, u_t, v_t, p_t in zip(x_star, y_star, t_star, u_pred, v_pred, p_pred, u_star, v_star, p_star):
+        print(x_p, y_p, t_p, u_p, v_p, p_p, 'orig', u_t, v_t, p_t)
+        
     
     # Error
     error_u = np.linalg.norm(u_star-u_pred,2)/np.linalg.norm(u_star,2)
@@ -289,7 +356,7 @@ if __name__ == "__main__":
 #    plot_solution(X_star, p_pred, 3)    
 #    plot_solution(X_star, p_star, 4)
 #    plot_solution(X_star, p_star - p_pred, 5)
-    
+    '''
     # Predict for plotting
     lb = X_star.min(0)
     ub = X_star.max(0)
@@ -313,7 +380,7 @@ if __name__ == "__main__":
 
     # Training
     model = PhysicsInformedNN(x_train, y_train, t_train, u_train, v_train, layers)
-    model.train(200000)
+    model.train(1000)
         
     lambda_1_value_noisy = model.sess.run(model.lambda_1)
     lambda_2_value_noisy = model.sess.run(model.lambda_2)
@@ -421,7 +488,7 @@ if __name__ == "__main__":
     ax.set_zlim3d(r3)
     axisEqual3D(ax)
     
-    # savefig('./figures/NavierStokes_data') 
+    savefig('./figures/NavierStokes_data') 
 
     
     fig, ax = newfig(1.015, 0.8)
@@ -486,7 +553,8 @@ if __name__ == "__main__":
     s = s + r' \hline'
     s = s + r' \end{tabular}$'
  
-    ax.text(0.015,0.0,s)
+    #ax.text(0.015,0.0,s)
     
-    # savefig('./figures/NavierStokes_prediction') 
+    savefig('./figures/NavierStokes_prediction') 
 
+    '''
